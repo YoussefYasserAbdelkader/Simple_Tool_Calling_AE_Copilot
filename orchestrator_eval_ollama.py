@@ -47,7 +47,7 @@ def normalize_chiplet(data: dict) -> dict:
             data["ucie_interface"] = {"mode": data["ucie_interface"]}
         elif isinstance(data["ucie_interface"], dict):
             mode = data["ucie_interface"].get("mode")
-            if mode == "device":  # LLM mistake
+            if mode == "device":  
                 data["ucie_interface"]["mode"] = "endpoint"
             elif mode not in ["host", "endpoint"]:
                 data["ucie_interface"]["mode"] = "host"
@@ -96,20 +96,33 @@ def extract_first_json(text: str) -> Optional[str]:
         return text[start:end+1]
     except Exception:
         return None
+def auto_close_json(snippet: str) -> str:
+    """Append missing closing brackets/braces to complete the JSON."""
+    open_braces = snippet.count("{")
+    close_braces = snippet.count("}")
+    open_brackets = snippet.count("[")
+    close_brackets = snippet.count("]")
+    snippet += "}" * (open_braces - close_braces)
+    snippet += "]" * (open_brackets - close_brackets)
+    return snippet
 
 def parse_json_schema(output: str, schema) -> Optional[dict]:
     j = extract_first_json(output)
     if not j:
         return None
+    j = auto_close_json(j)
     try:
         data = json.loads(j)
+        if isinstance(data, dict) and len(data) == 1:
+            key = next(iter(data))
+            if key in ("add_chiplet", "add_cpu_cluster"):
+                data = data[key]
         if schema is AeChipletType:
-            data = normalize_chiplet(data)  # ✅ normalize before validation
+            data = normalize_chiplet(data)  
         obj = schema(**data)
         return obj.model_dump(mode="json")
     except (ValidationError, Exception) as e:
         print("❌ JSON parse failed:", e)
-        print("Raw text:", output)
         return None
 
 # --------- Ollama Runner ---------
