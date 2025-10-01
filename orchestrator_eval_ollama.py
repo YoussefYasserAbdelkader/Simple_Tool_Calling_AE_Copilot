@@ -35,7 +35,7 @@ def normalize_cpu_cluster(data: dict) -> dict:
         elif isinstance(freq, dict):
             pass
     else:
-        pass
+        data["frequency"] = {"value": 0, "unit": "MHz"}  
 
     return data
 # --------- Normalizer for Chiplets ---------
