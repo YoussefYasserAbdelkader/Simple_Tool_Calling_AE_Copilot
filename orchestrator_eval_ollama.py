@@ -9,6 +9,35 @@ from ae_xsd_schema import (
     AeChipletType,
 )
 
+def normalize_cpu_cluster(data: dict) -> dict:
+    # Normalize short_name
+    sn = data.get("short_name")
+    if isinstance(sn, str):
+        data["short_name"] = {"name": sn}
+    elif isinstance(sn, dict):
+        # Fix keys with leading/trailing spaces
+        sn = {k.strip(): v for k, v in sn.items()}
+        if "value" in sn:
+            data["short_name"] = {"name": sn["value"]}
+        elif "name" in sn:
+            data["short_name"] = {"name": sn["name"]}
+
+    # Normalize frequency
+    freq = data.get("frequency")
+    if freq is not None:
+        if isinstance(freq, (int, float)):
+            data["frequency"] = {"value": freq, "unit": "MHz"}
+        elif isinstance(freq, str):
+            import re
+            m = re.match(r"(\d+)", freq)
+            if m:
+                data["frequency"] = {"value": int(m.group(1)), "unit": "MHz"}
+        elif isinstance(freq, dict):
+            pass
+    else:
+        pass
+
+    return data
 # --------- Normalizer for Chiplets ---------
 def normalize_chiplet(data: dict) -> dict:
     """Fix common LLM mistakes in chiplet JSON before validation."""
@@ -18,8 +47,36 @@ def normalize_chiplet(data: dict) -> dict:
         data["ucie_interface"] = data.pop("ucei_interface")
 
     # ---- Normalize short_name ----
-    if isinstance(data.get("short_name"), str):
-        data["short_name"] = {"name": data["short_name"]}
+    sn = data.get("short_name")
+    if isinstance(sn, str):
+        data["short_name"] = {"name": sn}
+    elif isinstance(sn, dict):
+        sn = {k.strip(): v for k, v in sn.items()}
+        if "value" in sn:
+            data["short_name"] = {"name": sn["value"]}
+        elif "name" in sn:
+            data["short_name"] = {"name": sn["name"]}
+
+    # ---- Normalize cpu_cluster if present ----
+    if "cpu_cluster" in data and data["cpu_cluster"] is not None:
+        cc = data["cpu_cluster"]
+        # If cpu_cluster is a dict and short_name is a string, fix it
+        if isinstance(cc, dict):
+            sn = cc.get("short_name")
+            if isinstance(sn, str):
+                cc["short_name"] = {"name": sn}
+            elif isinstance(sn, dict):
+                sn = {k.strip(): v for k, v in sn.items()}
+                if "value" in sn:
+                    cc["short_name"] = {"name": sn["value"]}
+                elif "name" in sn:
+                    cc["short_name"] = {"name": sn["name"]}
+            # If required fields are missing, set them to None or a sensible default
+            if "operating_system" not in cc:
+                cc["operating_system"] = None
+            if "frequency" in cc and isinstance(cc["frequency"], (int, float)):
+                cc["frequency"] = {"value": cc["frequency"], "unit": "MHz"}
+            data["cpu_cluster"] = cc
 
     # ---- Normalize axi_bus ----
     if "axi_bus" in data:
@@ -44,16 +101,20 @@ def normalize_chiplet(data: dict) -> dict:
     # ---- Normalize ucie_interface ----
     if "ucie_interface" in data:
         if isinstance(data["ucie_interface"], str):
-            data["ucie_interface"] = {"mode": data["ucie_interface"]}
+            mode = data["ucie_interface"].lower()
+            if mode == "device":
+                mode = "endpoint"
+            elif mode not in ["host", "endpoint"]:
+                mode = "host"
+            data["ucie_interface"] = {"mode": mode}
         elif isinstance(data["ucie_interface"], dict):
-            mode = data["ucie_interface"].get("mode")
-            if mode == "device":  
+            mode = data["ucie_interface"].get("mode", "").lower()
+            if mode == "device":
                 data["ucie_interface"]["mode"] = "endpoint"
             elif mode not in ["host", "endpoint"]:
                 data["ucie_interface"]["mode"] = "host"
 
     return data
-
 
 # --------- Prompt Template ---------
 TOOL_DOC = """
@@ -115,16 +176,17 @@ def parse_json_schema(output: str, schema) -> Optional[dict]:
         data = json.loads(j)
         if isinstance(data, dict) and len(data) == 1:
             key = next(iter(data))
-            if key in ("add_chiplet", "add_cpu_cluster"):
+            if key in ("add_chiplet", "add_cpu_cluster", "parameters", "operation"):
                 data = data[key]
         if schema is AeChipletType:
-            data = normalize_chiplet(data)  
+            data = normalize_chiplet(data)
+        elif schema is AeCpuCluster:
+            data = normalize_cpu_cluster(data)
         obj = schema(**data)
         return obj.model_dump(mode="json")
     except (ValidationError, Exception) as e:
         print("❌ JSON parse failed:", e)
         return None
-
 # --------- Ollama Runner ---------
 def ollama_run(model: str, prompt: str) -> str:
     cmd = ["ollama", "run", model]
